@@ -13,5 +13,5 @@
 | limitations under the License.
 |
 Dir <Obey$Dir>
-amu_machine clean COMPONENT=LanManFS
+amu clean COMPONENT=LanManFS
 stripdepnd Makefile

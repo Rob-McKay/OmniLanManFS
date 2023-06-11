@@ -13,11 +13,11 @@
  * limitations under the License.
  */
 /*
-*
-*  NameCache.c  -- Long filename cacheing using circular buffer
-*
-*  05-02-99 sbrodie  Original
-*/
+ *
+ *  NameCache.c  -- Long filename cacheing using circular buffer
+ *
+ *  05-02-99 sbrodie  Original
+ */
 
 /* Test program builds with:
  *
@@ -59,96 +59,84 @@
 #include "stdtypes.h"
 #include "NameCache.h"
 
-#ifndef LONGNAMES
-BYTE *NameCache_Locate(const char *filename)
+static struct
 {
-  (void) filename;
-  return NULL;
-}
-
-void NameCache_Add(const char *dirname, BYTE *b)
-{
-  (void) dirname;
-  (void) b;
-}
-
-void NameCache_Flush(ncf_reason why)
-{
-        (void) why;
-}
-
-void NameCache_Init(void)
-{
-}
-#else
-
-static struct {
-        BYTE *data;
-        int  head;
-        int  tail;
-        int  last;
-        int  hits;
+	BYTE *data;
+	int head;
+	int tail;
+	int last;
+	int hits;
 } NameCache;
 
-typedef struct {
-        int  offset_next;
-        int  offset_data;
-        char dirbase[1];
+typedef struct
+{
+	int offset_next;
+	int offset_data;
+	char dirbase[1];
 } rec_hdr;
 
 static const size_t cachesize = 4096;
 
 static void NameCache_Exit(void)
 {
-        free(NameCache.data);
-        NameCache.data = NULL;
+	free(NameCache.data);
+	NameCache.data = NULL;
 }
 
 void NameCache_Flush(ncf_reason why)
 {
-        debug2("NameCacheFlush(reason = %d) hits %d\n", why, NameCache.hits);
-        if (why == ncf_REINIT) NameCache.hits = 0;
-        if (NameCache.data) {
-                NameCache.head = 0;
-                NameCache.tail = 0;
-                NameCache.last = -1;
-                ((rec_hdr *) NameCache.data) -> offset_next = -1;
-        }
+	debug2("NameCacheFlush(reason = %d) hits %d\n", why, NameCache.hits);
+	if (why == ncf_REINIT)
+		NameCache.hits = 0;
+	if (NameCache.data)
+	{
+		NameCache.head = 0;
+		NameCache.tail = 0;
+		NameCache.last = -1;
+		((rec_hdr *)NameCache.data)->offset_next = -1;
+	}
 }
 
 void NameCache_Init(void)
 {
-        NameCache.data = calloc(1, cachesize);
-        if (NameCache.data != 0) {
-        	atexit(NameCache_Exit);
-        }
-       	NameCache_Flush(ncf_REINIT);
+	NameCache.data = calloc(1, cachesize);
+	if (NameCache.data != 0)
+	{
+		atexit(NameCache_Exit);
+	}
+	NameCache_Flush(ncf_REINIT);
 }
 
 BYTE *NameCache_Locate(const char *filename)
 {
-        rec_hdr *hdr;
+	rec_hdr *hdr;
 	int offset = NameCache.tail;
-	if (NameCache.data == NULL || NameCache.last == -1) return NULL;
+	if (NameCache.data == NULL || NameCache.last == -1)
+		return NULL;
 
-	for (;;offset += hdr->offset_next) {
-	        hdr = (rec_hdr *)(NameCache.data + offset);
-	        if (hdr->offset_data == -1) {
-	                if (offset == NameCache.head) break;
-	        }
-	        else {
-	        	BYTE *res = NameCache.data + offset + hdr->offset_data;
-        		const size_t baselen = strlen(hdr->dirbase);
+	for (;; offset += hdr->offset_next)
+	{
+		hdr = (rec_hdr *)(NameCache.data + offset);
+		if (hdr->offset_data == -1)
+		{
+			if (offset == NameCache.head)
+				break;
+		}
+		else
+		{
+			BYTE *res = NameCache.data + offset + hdr->offset_data;
+			const size_t baselen = strlen(hdr->dirbase);
 
-        		if (filename[baselen-1] == '\\')
-	                if (!strcmp((char *)res+23, filename + baselen))
-	        	if (!strncmp(hdr->dirbase, filename, baselen)) {
-	                        /* Found match */
-	                        debug1("NameCache: returning match for `%s'\n", filename);
-	                        ++NameCache.hits;
-        	                return res;
-                	}
-	        }
+			if (filename[baselen - 1] == '\\')
+				if (!strcmp((char *)res + 23, filename + baselen))
+					if (!strncmp(hdr->dirbase, filename, baselen))
+					{
+						/* Found match */
+						debug1("NameCache: returning match for `%s'\n", filename);
+						++NameCache.hits;
+						return res;
+					}
+		}
 	}
 
 	return NULL;
@@ -157,90 +145,103 @@ BYTE *NameCache_Locate(const char *filename)
 static void NameCache_Trim(void)
 {
 	/* Any deleted entries at tail of queue - dump them */
-        while (NameCache.tail != NameCache.head) {
-	        rec_hdr *tailp = (rec_hdr *) (NameCache.data + NameCache.tail);
-                if (tailp->offset_data != -1) {
-                	break;
-                }
-                NameCache.tail += tailp->offset_next;
-        }
+	while (NameCache.tail != NameCache.head)
+	{
+		rec_hdr *tailp = (rec_hdr *)(NameCache.data + NameCache.tail);
+		if (tailp->offset_data != -1)
+		{
+			break;
+		}
+		NameCache.tail += tailp->offset_next;
+	}
 
-        if (NameCache.tail == NameCache.head) {
-                /* Empty */
-                debug0("Reset cache\n");
-                NameCache.last = -1;
-                NameCache.tail = NameCache.head = 0;
-                ((rec_hdr *) (NameCache.data))->offset_data = -1;
-        }
+	if (NameCache.tail == NameCache.head)
+	{
+		/* Empty */
+		debug0("Reset cache\n");
+		NameCache.last = -1;
+		NameCache.tail = NameCache.head = 0;
+		((rec_hdr *)(NameCache.data))->offset_data = -1;
+	}
 }
 
 void NameCache_Add(const char *dirname, BYTE *b)
 {
-        /* Calculate size of record data, directory name, and
-         * management overhead.
-         */
-        static const size_t overhead = offsetof(rec_hdr, dirbase);
-        const size_t filename_len = b[22];
-        const size_t dirname_len = strlen(dirname) + 1;
-        const size_t rec_size = ((23 + filename_len + 1 + 3) & ~3) +
-        			(2 * overhead) +
-        			((dirname_len + 3 & ~3));
-        rec_hdr *new_rec;
+	/* Calculate size of record data, directory name, and
+	 * management overhead.
+	 */
+	static const size_t overhead = offsetof(rec_hdr, dirbase);
+	const size_t filename_len = b[22];
+	const size_t dirname_len = strlen(dirname) + 1;
+	const size_t rec_size = ((23 + filename_len + 1 + 3) & ~3) +
+							(2 * overhead) +
+							((dirname_len + 3 & ~3));
+	rec_hdr *new_rec;
 
-	if (NameCache.data == NULL || rec_size >= cachesize) return;
+	if (NameCache.data == NULL || rec_size >= cachesize)
+		return;
 
-        if ((NameCache.head + rec_size) > cachesize) {
-                /* Re-use first record as we will require a wrap-around */
-                rec_hdr *tailp;
-                NameCache.tail = 0;
-                while (NameCache.tail < rec_size) {
-                	tailp = (rec_hdr *) (NameCache.data + NameCache.tail);
-                	if (NameCache.tail == NameCache.head) {
-                                /* NameCache_Trim() will sort this out */
-                                break;
-                        }
-                	NameCache.tail += tailp->offset_next;
-                }
-                debug2("Tail now %#x ; Head now %#x\n", NameCache.tail, NameCache.head);
-                if (NameCache.head != NameCache.tail) {
-                        /* If they are equal, NameCache_Trim() will reset the queue */
-                        NameCache.head = 0;
-                }
-        }
-        else if ((NameCache.tail < NameCache.head) || NameCache.last == -1) {
-                /* OK - we haven't got a loop active */
-        }
-        else while ((NameCache.tail - NameCache.head) < rec_size) {
-                /* Buffer is already wrapped, but we can afford to wrap it */
-               	rec_hdr *tailp = (rec_hdr *) (NameCache.data + NameCache.tail);
-               	debug1("Discarding entry at %#x\n", NameCache.tail);
-                NameCache.tail += tailp->offset_next;
-                if (NameCache.tail <= NameCache.head) {
-                        /* Have wrapped around */
-                        break;
-                }
-        }
+	if ((NameCache.head + rec_size) > cachesize)
+	{
+		/* Re-use first record as we will require a wrap-around */
+		rec_hdr *tailp;
+		NameCache.tail = 0;
+		while (NameCache.tail < rec_size)
+		{
+			tailp = (rec_hdr *)(NameCache.data + NameCache.tail);
+			if (NameCache.tail == NameCache.head)
+			{
+				/* NameCache_Trim() will sort this out */
+				break;
+			}
+			NameCache.tail += tailp->offset_next;
+		}
+		debug2("Tail now %#x ; Head now %#x\n", NameCache.tail, NameCache.head);
+		if (NameCache.head != NameCache.tail)
+		{
+			/* If they are equal, NameCache_Trim() will reset the queue */
+			NameCache.head = 0;
+		}
+	}
+	else if ((NameCache.tail < NameCache.head) || NameCache.last == -1)
+	{
+		/* OK - we haven't got a loop active */
+	}
+	else
+		while ((NameCache.tail - NameCache.head) < rec_size)
+		{
+			/* Buffer is already wrapped, but we can afford to wrap it */
+			rec_hdr *tailp = (rec_hdr *)(NameCache.data + NameCache.tail);
+			debug1("Discarding entry at %#x\n", NameCache.tail);
+			NameCache.tail += tailp->offset_next;
+			if (NameCache.tail <= NameCache.head)
+			{
+				/* Have wrapped around */
+				break;
+			}
+		}
 
 	NameCache_Trim();
 
 	/* Locate insertion point and add onto queue */
-	if (NameCache.last != -1) {
-	        rec_hdr *lastp = (rec_hdr *) (NameCache.data + NameCache.last);
-	        lastp->offset_next = NameCache.head - NameCache.last;
+	if (NameCache.last != -1)
+	{
+		rec_hdr *lastp = (rec_hdr *)(NameCache.data + NameCache.last);
+		lastp->offset_next = NameCache.head - NameCache.last;
 	}
 
-	debug2("Adding `%s' in `%s'\n", (char *)b+23, dirname);
+	debug2("Adding `%s' in `%s'\n", (char *)b + 23, dirname);
 	NameCache.last = NameCache.head;
 	NameCache.head = NameCache.head + rec_size - overhead;
-	new_rec = (rec_hdr *) (NameCache.data + NameCache.head);
+	new_rec = (rec_hdr *)(NameCache.data + NameCache.head);
 	new_rec->offset_data = -1;
 	new_rec->offset_next = 0;
-	new_rec = (rec_hdr *) (NameCache.data + NameCache.last);
+	new_rec = (rec_hdr *)(NameCache.data + NameCache.last);
 	new_rec->offset_data = overhead + ((dirname_len + 3) & ~3);
 	new_rec->offset_next = NameCache.head - NameCache.last;
 	memcpy(new_rec->dirbase, dirname, dirname_len);
 	memcpy(NameCache.data + NameCache.last + new_rec->offset_data, b,
-		23 + filename_len);
+		   23 + filename_len);
 	NameCache.data[NameCache.last + new_rec->offset_data + 23 + filename_len] = '\0';
 }
 
@@ -248,72 +249,85 @@ void NameCache_Add(const char *dirname, BYTE *b)
 
 static void DumpBuffer(void *ptr, int len)
 {
-        const char *membuf = ptr;
-        int i,j;
-        for (i=0; i<((len+31)&~31); ++i) {
-                if (!(i & 31)) {
-                        printf("  ");
-                        if (i) for (j = i - 32; j != i; ++j) {
-                                printf("%c", (membuf[j]>=32 && membuf[j] != 0x7f) ?
-                                membuf[j] : '.');
-                        }
-                        printf("\n%04x: ", i);
-                }
-                if (i>=len) {
-                        printf("  ");
-                        if (3==(i & 3)) printf(" ");
-                }
-                else {
-                        printf("%02x", membuf[i]);
-                        if (3==(i & 3)) printf(" ");
-                }
-        }
-        if (i) for (printf("  "), j = i - 32; j != i; ++j) printf("%c",
-            j>=len ? ' ' : (membuf[j]>=32 && membuf[j] != 0x7f) ?
-            membuf[j] : '.');
+	const char *membuf = ptr;
+	int i, j;
+	for (i = 0; i < ((len + 31) & ~31); ++i)
+	{
+		if (!(i & 31))
+		{
+			printf("  ");
+			if (i)
+				for (j = i - 32; j != i; ++j)
+				{
+					printf("%c", (membuf[j] >= 32 && membuf[j] != 0x7f) ? membuf[j] : '.');
+				}
+			printf("\n%04x: ", i);
+		}
+		if (i >= len)
+		{
+			printf("  ");
+			if (3 == (i & 3))
+				printf(" ");
+		}
+		else
+		{
+			printf("%02x", membuf[i]);
+			if (3 == (i & 3))
+				printf(" ");
+		}
+	}
+	if (i)
+		for (printf("  "), j = i - 32; j != i; ++j)
+			printf("%c",
+				   j >= len ? ' ' : (membuf[j] >= 32 && membuf[j] != 0x7f) ? membuf[j]
+																		   : '.');
 	printf("\n");
 }
 
 static void DumpNameCache(void)
 {
-        printf("head = %#x\ntail = %#x\nlast = %#x\nData = %p",
-        	NameCache.head, NameCache.tail, NameCache.last, NameCache.data);
-        DumpBuffer(NameCache.data, cachesize);
+	printf("head = %#x\ntail = %#x\nlast = %#x\nData = %p",
+		   NameCache.head, NameCache.tail, NameCache.last, NameCache.data);
+	DumpBuffer(NameCache.data, cachesize);
 }
 
 static void SoakTest(void)
 {
-        int i, j;
-        BYTE entry[256], *res;
-        char dirname[256];
-        char fullname[256];
-        NameCache_Init();
+	int i, j;
+	BYTE entry[256], *res;
+	char dirname[256];
+	char fullname[256];
+	NameCache_Init();
 
 	/* Force repeatability */
 	srand(1);
 
-        memset(entry, 7, sizeof(entry));
+	memset(entry, 7, sizeof(entry));
 
-	for (i=0;i<500000;++i) {
-	        int dlen = (rand() % 32) + 1;
-	        int llen = (rand() % 64) + 1;
-	        if (!(i % 256)) printf("%8d", i);
-	        for (j=0; j<(dlen+llen); ++j) {
-	                dirname[j] = (rand() % 26) + 'A';
-	                entry[23 + j] = (rand() % 26) + 'a';
-	        }
-	        entry[22] = llen;
-	        dirname[dlen] = '\0';
-	        //printf("Add `%s' `%.*s'\n", dirname, llen, (char *)entry+23);
-	        NameCache_Add(0, dirname, entry);
-	        sprintf(fullname, "%s\\%.*s", dirname, llen, (char *)entry+23);
-	        //printf("Seeking `%s'\n", fullname);
-	        res = NameCache_Locate(fullname, 0);
-	        if (!res) {
-	                DumpNameCache();
-	                printf("\n\n(%d) Failed to find entry!\n", i);
-	                exit(1);
-	        }
+	for (i = 0; i < 500000; ++i)
+	{
+		int dlen = (rand() % 32) + 1;
+		int llen = (rand() % 64) + 1;
+		if (!(i % 256))
+			printf("%8d", i);
+		for (j = 0; j < (dlen + llen); ++j)
+		{
+			dirname[j] = (rand() % 26) + 'A';
+			entry[23 + j] = (rand() % 26) + 'a';
+		}
+		entry[22] = llen;
+		dirname[dlen] = '\0';
+		// printf("Add `%s' `%.*s'\n", dirname, llen, (char *)entry+23);
+		NameCache_Add(0, dirname, entry);
+		sprintf(fullname, "%s\\%.*s", dirname, llen, (char *)entry + 23);
+		// printf("Seeking `%s'\n", fullname);
+		res = NameCache_Locate(fullname, 0);
+		if (!res)
+		{
+			DumpNameCache();
+			printf("\n\n(%d) Failed to find entry!\n", i);
+			exit(1);
+		}
 	}
 	printf("\n");
 }
@@ -321,7 +335,7 @@ static void SoakTest(void)
 int main(void)
 {
 	BYTE entry[256], *res;
-	char fullname[64], *const leafptr = (char *) entry+23;
+	char fullname[64], *const leafptr = (char *)entry + 23;
 	char *dirname = "A:\\ADIRECTORY";
 	char *leafname = "filen";
 
@@ -340,7 +354,7 @@ int main(void)
 	NameCache_Add(0, dirname, entry);
 	dirname = "A:\\3RDDIRNAME";
 	NameCache_Add(0, dirname, entry);
-	//DumpNameCache();
+	// DumpNameCache();
 	dirname = "B:\\BDIRNAME";
 	NameCache_Add(0, dirname, entry);
 	NameCache_Add(0, dirname, entry);
@@ -348,8 +362,8 @@ int main(void)
 	dirname = "C:\\ANOTHERCDIR";
 	NameCache_Add(0, dirname, entry);
 	DumpNameCache();
-	leafname = "a very long filename generated to cause trouble"\
-	 "as several items should be thrown away and cause a cache reset to occur?";
+	leafname = "a very long filename generated to cause trouble"
+			   "as several items should be thrown away and cause a cache reset to occur?";
 	entry[22] = strlen(leafname);
 	strcpy(leafptr, leafname);
 	DumpNameCache();
@@ -362,7 +376,6 @@ int main(void)
 
 	SoakTest();
 
-        return 0;
+	return 0;
 }
 #endif /* TEST */
-#endif /* LONGNAMES */

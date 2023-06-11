@@ -16,13 +16,12 @@
 #
 
 COMPONENT    = LanManFS
-OBJS         = Xlate Transact Stats SMB RPC Printers Omni NetBIOS NBIP \
-               NameCache Logon LLC LanMan CoreFn buflib Attr \
-               Interface Auth md5c md4c
-CINCLUDES    = ${TCPIPINC}
+OBJS         = Xlate Printers Omni NameCache Logon LanMan CoreFn buflib \
+               Interface
+CINCLUDES    =
 HDRS         =
 CMHGFILE     = LanMan_MH
-CMHGDEPENDS  = LanMan LLC Logon NBIP Omni
+CMHGDEPENDS  = LanMan Logon Omni
 LIBS         = ${NET5LIBS} ${ASMUTILS}
 RES_PATH     = ThirdParty.OmniClient
 CDEFINES     = -DLONGNAMES ${OPTIONS}
@@ -33,6 +32,7 @@ CMHGDEFINES  = ${OPTIONS}
 ifeq ("${CMDHELP}","None")
 CMHGDEFINES += -DNO_INTERNATIONAL_HELP
 endif
+CMHGINCLUDES = -ICInc:
 # Carry our own ThirdParty resources, don't put them in the Messages module
 CUSTOMRES    = no
 RESDIR       = ${MERGEDRDIR}

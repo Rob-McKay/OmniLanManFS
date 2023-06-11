@@ -1,3 +1,4 @@
+/* -*- mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* Copyright 1998 Acorn Computers Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,11 +14,11 @@
  * limitations under the License.
  */
 /*
-*    C.BUFLIB - Buffer management routines
-*
-*    28-02-93 INH Original
-*    18-12-95	  Split from Network.C
-*/
+ *    C.BUFLIB - Buffer management routines
+ *
+ *    28-02-93 INH Original
+ *    18-12-95	  Split from Network.C
+ */
 
 /* Standard includes */
 
@@ -33,37 +34,38 @@
 #include "swis.h"
 #include "stdtypes.h"
 #include "Mbuf.h"
-#include "Stats.h"
 #include "BufLib.h"
 
 /* -------------- */
 
-#define SAVE_INT_STATE   \
-              int intstate = _kernel_irqs_disabled(); _kernel_irqs_off();
+#define SAVE_INT_STATE                      \
+    int intstate = _kernel_irqs_disabled(); \
+    _kernel_irqs_off();
 
 #define RESTORE_INT_STATE \
-              if ( !intstate ) _kernel_irqs_on();
+    if (!intstate)        \
+        _kernel_irqs_on();
 
 /* MBuffer handling routines ******************************************** */
 
-static struct mbctl Net_Mbctl;  /* MBuf control struct */
-static bool Mbufs_Attached;     /* True if we've got an active mbuf
-       	    			   manager session */
+static struct mbctl Net_Mbctl; /* MBuf control struct */
+static bool Mbufs_Attached;    /* True if we've got an active mbuf
+                    manager session */
 
 /* ------------------------------------ */
 
-void FreeBuf( BUFCHAIN pB )
+void FreeBuf(BUFCHAIN pB)
 {
-  Net_Mbctl.free ( &Net_Mbctl, pB  );
+    Net_Mbctl.free(&Net_Mbctl, pB);
 }
 
 /* ------------------------------------ */
 
 /* It is documented that NULL is a safe value to pass here */
 
-void FreeChain ( BUFCHAIN pB )
+void FreeChain(BUFCHAIN pB)
 {
-  Net_Mbctl.freem ( &Net_Mbctl, pB );
+    Net_Mbctl.freem(&Net_Mbctl, pB);
 }
 
 /* ----------------------------------- */
@@ -78,62 +80,62 @@ void FreeChain ( BUFCHAIN pB )
    we're out of buffers!
 */
 
-BUFCHAIN AddChain ( BUFCHAIN pBin, void *pData, int datalen )
+BUFCHAIN AddChain(BUFCHAIN pBin, void *pData, int datalen)
 {
-  struct mbuf *pBnew;
-  int n;
+    struct mbuf *pBnew;
+    int n;
 
-  /* If we already have a chain there, try to copy as much
-     data at the start as possible
-  */
+    /* If we already have a chain there, try to copy as much
+       data at the start as possible
+    */
 
-  if ( pBin != NULL )
-  {
-    n = pBin->m_off - pBin->m_inioff; /* Amount of space at start */
-    /* Most common case - append to start of existing chain */
-    if ( n >= datalen )
+    if (pBin != NULL)
     {
-      pBin->m_off -= datalen;
-      pBin->m_len += datalen;
-      memcpy ( mtod(pBin, char*), pData, datalen );
-      return pBin;
+        n = pBin->m_off - pBin->m_inioff; /* Amount of space at start */
+        /* Most common case - append to start of existing chain */
+        if (n >= datalen)
+        {
+            pBin->m_off -= datalen;
+            pBin->m_len += datalen;
+            memcpy(mtod(pBin, char *), pData, datalen);
+            return pBin;
+        }
+        else if (n > 0)
+        {
+            pBin->m_off -= n;
+            pBin->m_len += n;
+            /* Won't all fit in this buffer - copy some anyway */
+            memcpy(mtod(pBin, char *), (BYTE *)pData + datalen - n, n);
+            datalen -= n;
+        }
     }
-    else if ( n > 0 )
+
+    /* We need to alloc some new mbufs to hold data */
+
+    /* Try to get a single mbuf & put the data at the end */
+
+    pBnew = Net_Mbctl.alloc_s(&Net_Mbctl, datalen, NULL);
+    if (pBnew != NULL)
     {
-      pBin->m_off -= n;
-      pBin->m_len += n;
-      /* Won't all fit in this buffer - copy some anyway */
-      memcpy ( mtod(pBin, char*), (BYTE *)pData+datalen-n, n );
-      datalen -= n;
+        pBnew->m_len = datalen;
+        pBnew->m_off = pBnew->m_inioff + pBnew->m_inilen - datalen;
+        memcpy(mtod(pBnew, char *), (BYTE *)pData, datalen);
+        pBnew->m_next = pBin;
+        return pBnew;
     }
-  }
 
-  /* We need to alloc some new mbufs to hold data */
+    /* Give up trying to allocate efficiently at this point.
+       Just make a chain and tack it on.
+     */
 
-  /* Try to get a single mbuf & put the data at the end */
+    pBnew = Net_Mbctl.alloc(&Net_Mbctl, datalen, pData);
+    if (pBnew == NULL) /* Bother! */
+    {
+        FreeChain(pBin);
+        return NULL;
+    }
 
-  pBnew = Net_Mbctl.alloc_s(&Net_Mbctl, datalen, NULL);
-  if ( pBnew != NULL )
-  {
-    pBnew->m_len = datalen;
-    pBnew->m_off = pBnew->m_inioff + pBnew->m_inilen - datalen;
-    memcpy ( mtod(pBnew, char *), (BYTE *)pData, datalen );
-    pBnew->m_next = pBin;
-    return pBnew;
-  }
-
-  /* Give up trying to allocate efficiently at this point.
-     Just make a chain and tack it on.
-   */
-
-  pBnew = Net_Mbctl.alloc(&Net_Mbctl, datalen, pData);
-  if ( pBnew == NULL )  /* Bother! */
-  {
-    FreeChain ( pBin );
-    return NULL;
-  }
-
-  return Net_Mbctl.cat(&Net_Mbctl, pBnew, pBin);
+    return Net_Mbctl.cat(&Net_Mbctl, pBnew, pBin);
 }
 
 /* ---------------------------------- */
@@ -142,33 +144,33 @@ BUFCHAIN AddChain ( BUFCHAIN pBin, void *pData, int datalen )
     an indirect mbuf is tacked to the start of the mbuf chain.
 */
 
-BUFCHAIN AddChainIndirect ( BUFCHAIN pRest, void *pData,
-                                           int datalen )
+BUFCHAIN AddChainIndirect(BUFCHAIN pRest, void *pData,
+                          int datalen)
 {
-  BUFCHAIN pBnew;
+    BUFCHAIN pBnew;
 
-  pBnew = Net_Mbctl.alloc_u(&Net_Mbctl, datalen, pData);
-  /* We rely on alloc_u setting m_inioff and m_inilen to the
-     same as m_off and m_len (as documented), to stop further
-     AddChains from trampling on memory. Also rely on
-     it being a single allocation (as documented).
-  */
+    pBnew = Net_Mbctl.alloc_u(&Net_Mbctl, datalen, pData);
+    /* We rely on alloc_u setting m_inioff and m_inilen to the
+       same as m_off and m_len (as documented), to stop further
+       AddChains from trampling on memory. Also rely on
+       it being a single allocation (as documented).
+    */
 
-  if ( pBnew == NULL ) /* Bother! */
-  {
-    FreeChain(pRest);
-    return NULL;
-  }
+    if (pBnew == NULL) /* Bother! */
+    {
+        FreeChain(pRest);
+        return NULL;
+    }
 
-  pBnew->m_next = pRest;
-  return pBnew;
+    pBnew->m_next = pRest;
+    return pBnew;
 }
 
 /* ---------------------------------- */
 
-BUFCHAIN AllocBlankChain ( int datalen )
+BUFCHAIN AllocBlankChain(int datalen)
 {
-  return Net_Mbctl.alloc(&Net_Mbctl, datalen, NULL);
+    return Net_Mbctl.alloc(&Net_Mbctl, datalen, NULL);
 }
 
 /* ---------------------------------- */
@@ -182,31 +184,30 @@ BUFCHAIN AllocBlankChain ( int datalen )
    zero.
 */
 
-int GetBlockPointer ( struct GBP_in_out *pGBP )
+int GetBlockPointer(struct GBP_in_out *pGBP)
 {
-  do
-  {
-    if ( pGBP->pChain == NULL )
+    do
     {
-      pGBP->BlockLen = 0;
-      return 0;
-    }
-    pGBP->pBlock = mtod(pGBP->pChain, BYTE *);
-    pGBP->BlockLen = pGBP->pChain->m_len;
-    pGBP->pChain = pGBP->pChain->m_next;
-  }
-    while ( pGBP->BlockLen == 0 );
+        if (pGBP->pChain == NULL)
+        {
+            pGBP->BlockLen = 0;
+            return 0;
+        }
+        pGBP->pBlock = mtod(pGBP->pChain, BYTE *);
+        pGBP->BlockLen = pGBP->pChain->m_len;
+        pGBP->pChain = pGBP->pChain->m_next;
+    } while (pGBP->BlockLen == 0);
 
-  return 1;
+    return 1;
 }
 
 /* ---------------------------------- */
 
 /* ConcatChain adds two chains together */
 
-BUFCHAIN ConcatChain ( BUFCHAIN first, BUFCHAIN last )
+BUFCHAIN ConcatChain(BUFCHAIN first, BUFCHAIN last)
 {
-  return Net_Mbctl.cat (&Net_Mbctl, first, last );
+    return Net_Mbctl.cat(&Net_Mbctl, first, last);
 }
 
 /* ---------------------------------- */
@@ -219,46 +220,45 @@ BUFCHAIN ConcatChain ( BUFCHAIN first, BUFCHAIN last )
    Datalen must be > 0 for successful operation.
 */
 
-BUFCHAIN GetData ( BUFCHAIN pB, void *pDst, int datalen )
+BUFCHAIN GetData(BUFCHAIN pB, void *pDst, int datalen)
 {
-  BUFCHAIN pB2;
-  int len_tst;
+    BUFCHAIN pB2;
+    int len_tst;
 
-  /* Check data is available: this will, in practise,
-     rarely need to look at more than one mbuf */
+    /* Check data is available: this will, in practise,
+       rarely need to look at more than one mbuf */
 
-  pB2 = pB;
-  len_tst = datalen;
-  while ( pB2 != NULL )
-  {
-    len_tst -= pB2->m_len;
-    if ( len_tst <= 0 )      /* We're there, dude */
-      return Net_Mbctl.trim (&Net_Mbctl, pB, datalen, pDst );
+    pB2 = pB;
+    len_tst = datalen;
+    while (pB2 != NULL)
+    {
+        len_tst -= pB2->m_len;
+        if (len_tst <= 0) /* We're there, dude */
+            return Net_Mbctl.trim(&Net_Mbctl, pB, datalen, pDst);
 
-    pB2 = pB2->m_next;
-  }
+        pB2 = pB2->m_next;
+    }
 
-  /* Out of data! */
-  FreeChain(pB);
-  return NULL;
+    /* Out of data! */
+    FreeChain(pB);
+    return NULL;
 }
 
 /* ------------------------------- */
 
-int ChainLen ( BUFCHAIN pB )
+int ChainLen(BUFCHAIN pB)
 {
-  return Net_Mbctl.count_bytes(&Net_Mbctl, pB);
+    return Net_Mbctl.count_bytes(&Net_Mbctl, pB);
 }
 
 /* ------------------------------- */
 
-int GetAllData ( BUFCHAIN pB, BYTE *pDst )
+int GetAllData(BUFCHAIN pB, BYTE *pDst)
 {
-  int n = Net_Mbctl.count_bytes(&Net_Mbctl, pB);
-  Net_Mbctl.trim (&Net_Mbctl, pB, n, pDst );
-  return n;
+    int n = Net_Mbctl.count_bytes(&Net_Mbctl, pB);
+    Net_Mbctl.trim(&Net_Mbctl, pB, n, pDst);
+    return n;
 }
-
 
 /* Queue handling routines *********************************** */
 
@@ -267,116 +267,110 @@ int GetAllData ( BUFCHAIN pB, BYTE *pDst )
    to be added) and a Head pointer (the next item to be removed).
 */
 
-void QueueFlush ( BUFQUEUE *pQ )
+void QueueFlush(BUFQUEUE *pQ)
 {
-  BUFCHAIN pB;
+    BUFCHAIN pB;
 
-  while ( pB = QueueGet(pQ), pB != NULL )
-    FreeChain (pB);
+    while (pB = QueueGet(pQ), pB != NULL)
+        FreeChain(pB);
 }
 
 /* -------------------- */
 
-void QueueAdd ( BUFQUEUE *pQ, BUFCHAIN pB )
+void QueueAdd(BUFQUEUE *pQ, BUFCHAIN pB)
 {
-  SAVE_INT_STATE;
+    SAVE_INT_STATE;
 
-  if ( pQ == NULL || pB == NULL )
-  {
-    STAT(STA_SERIOUS_BARF);
-  }
-  else
-  {
-    pB->m_list = NULL;
-
-    if ( pQ->Last == NULL )
+    if (pQ != NULL && pB != NULL)
     {
-      pQ->Head=pQ->Last=pB;
+        pB->m_list = NULL;
+
+        if (pQ->Last == NULL)
+        {
+            pQ->Head = pQ->Last = pB;
+        }
+        else
+        {
+            pQ->Last->m_list = pB;
+            pQ->Last = pB;
+        }
+    }
+
+    RESTORE_INT_STATE;
+}
+
+/* ------------------------- */
+
+BUFCHAIN QueueGet(BUFQUEUE *pQ)
+{
+    BUFCHAIN pB;
+    SAVE_INT_STATE;
+
+    if (pQ == NULL || pQ->Head == NULL)
+    {
+        pB = NULL;
     }
     else
     {
-      pQ->Last->m_list = pB;
-      pQ->Last = pB;
+        pB = pQ->Head;
+        pQ->Head = pB->m_list;
+
+        if (pQ->Head == NULL)
+            pQ->Last = NULL;
     }
-  }
 
-  RESTORE_INT_STATE;
+    RESTORE_INT_STATE;
+    return pB;
 }
 
 /* ------------------------- */
 
-BUFCHAIN  QueueGet ( BUFQUEUE *pQ )
+BUFCHAIN QueuePeek(BUFQUEUE *pQ)
 {
-  BUFCHAIN pB;
-  SAVE_INT_STATE;
-
-  if ( pQ == NULL || pQ->Head == NULL )
-  {
-    pB = NULL;
-  }
-  else
-  {
-    pB = pQ->Head;
-    pQ->Head = pB->m_list;
-
-    if ( pQ->Head == NULL )
-      pQ->Last = NULL;
-  }
-
-  RESTORE_INT_STATE;
-  return pB;
+    if (pQ == NULL)
+        return NULL;
+    return pQ->Head;
 }
-
-/* ------------------------- */
-
-BUFCHAIN  QueuePeek ( BUFQUEUE *pQ )
-{
-  if ( pQ == NULL )
-    return NULL;
-  return pQ->Head;
-}
-
 
 /* Initialise routine ------------------------------- */
 
-err_t Buf_Init ( void )
+err_t Buf_Init(void)
 {
-  _kernel_swi_regs R;
+    _kernel_swi_regs R;
 
-  Mbufs_Attached = false;
+    Mbufs_Attached = false;
 
-  Net_Mbctl.mbcsize = sizeof(struct mbctl);
-  Net_Mbctl.mbcvers = MBUF_MANAGER_VERSION;
-  Net_Mbctl.flags   = 0;     /* Normal entry points */
-  Net_Mbctl.advminubs = 112; /* Advisory Minimum mbuf size; this
-                             is the DCI-2 value, and in fact allows
-                             most SMB packets to live in one mbuf */
-  Net_Mbctl.advmaxubs = 1280; /* Advisory max mbuf size; in fact we
-                             never really use the full 1500 bytes;
-                             block writes tend to do it in 1K chunks */
-  Net_Mbctl.mincontig = 0;    /* We don't use the 'make contiguous'
-                             routine at present; no need to specify a
-                             value here */
-  Net_Mbctl.spare1 = 0;
+    Net_Mbctl.mbcsize = sizeof(struct mbctl);
+    Net_Mbctl.mbcvers = MBUF_MANAGER_VERSION;
+    Net_Mbctl.flags = 0;        /* Normal entry points */
+    Net_Mbctl.advminubs = 112;  /* Advisory Minimum mbuf size; this
+                                is the DCI-2 value, and in fact allows
+                                most SMB packets to live in one mbuf */
+    Net_Mbctl.advmaxubs = 1280; /* Advisory max mbuf size; in fact we
+                               never really use the full 1500 bytes;
+                               block writes tend to do it in 1K chunks */
+    Net_Mbctl.mincontig = 0;    /* We don't use the 'make contiguous'
+                               routine at present; no need to specify a
+                               value here */
+    Net_Mbctl.spare1 = 0;
 
-  R.r[0] = (int) &Net_Mbctl;
-  if ( _kernel_swi ( Mbuf_OpenSession, &R, &R ) != NULL )
-    return EMBUFMODULE;
+    R.r[0] = (int)&Net_Mbctl;
+    if (_kernel_swi(Mbuf_OpenSession, &R, &R) != NULL)
+        return EMBUFMODULE;
 
-  Mbufs_Attached = true;
-  return OK;
+    Mbufs_Attached = true;
+    return OK;
 }
 
 /* --------------------------- */
 
 void Buf_Shutdown(void)
 {
-  _kernel_swi_regs R;
-  if ( Mbufs_Attached )
-  {
-    R.r[0] = (int) &Net_Mbctl;
-    _kernel_swi ( Mbuf_CloseSession, &R, &R );
-  }
-  Mbufs_Attached = false;
+    _kernel_swi_regs R;
+    if (Mbufs_Attached)
+    {
+        R.r[0] = (int)&Net_Mbctl;
+        _kernel_swi(Mbuf_CloseSession, &R, &R);
+    }
+    Mbufs_Attached = false;
 }
-

@@ -15,22 +15,25 @@
 #ifndef SMBFIND_H
 #define SMBFIND_H
 
+#include <stdint.h>
+
+typedef err_t (*ENUM_DIR_FN)(BYTE *entry, int format, bool *taken, void *pw);
+
 typedef struct SMBFind_t
 {
-  DWORD         Resume;
-  DWORD         Offset;
-  hSHARE        hS;
-  char          ROPath[256];
+    DWORD Resume;
+    DWORD Offset;
+    uintptr_t hS;
+    char ROPath[256];
 
-  WORD          SID;
-  DWORD         ResumeKey;
-  char          FileName[DOS_NAME_LEN];
+    WORD SID;
+    DWORD ResumeKey;
+    char FileName[DOS_NAME_LEN];
 
 } SMBFind_t;
 
-err_t SMBFind_EnumDir(SMBFind_t *fnd, int dir_offset, const char* ro_path, int count,
-                                 ENUM_DIR_FN dirfn, void *dirfn_handle,
-                                  int *dir_offset_out);
-
+err_t SMBFind_EnumDir(SMBFind_t *fnd, int dir_offset, const char *ro_path, int count,
+                      ENUM_DIR_FN dirfn, void *dirfn_handle,
+                      int *dir_offset_out);
 
 #endif

@@ -50,9 +50,6 @@ generic-veneers: callback_entry/callback_handler,	; for anti-idleout callback
                  callevery_entry/callevery_handler
 
 vector-handlers: NBIP_CallbackFn/NBIP_CallbackFn_handler_ctrl,
-#ifndef NO_NETBEUI
-                 ReceiveFn TickerFn LLC_CallbackFn,
-#endif
                  EventFn
 
 #ifdef NO_INTERNATIONAL_HELP
