@@ -47,17 +47,17 @@
 #include "swis.h"
 
 #include "stdtypes.h"
-#include "SMB.h"
 #include "RPC.h"
 #include "LanMan.h"
 #include "Printers.h"
 #include "VersionNum"
 #include "Xlate.h"
 #include "LMVars.h"
-#include "Stats.h"
 #include "Logon.h"
 #include "Omni.h"
 #include "LanMan_MH.h"
+
+#include "smb2/libsmb2.h"
 
 #define INFO_STR_LEN 64
 /* Length of info string kept about servers & mounts */
@@ -98,8 +98,8 @@ struct mount_extra_info
 {
     NAMELIST *servername; /* Server ID -> S_VALID_TAG record*/
     NAMELIST *diskname;   /* Mount path -> D_VALID_TAG record */
-    char smb_lettr;       /* SMB deals in drive letters */
-    char connected;       /* Non-zero as soon as it is mounted */
+    struct smb2_context *smb2;       /* SMB2 context (opaque type) Non-NULL when mounted */
+    bool connected;       /* Non-zero as soon as it is mounted */
 };
 
 /* Information on a share */
@@ -466,14 +466,17 @@ err_t Omni_MountServer(char *servname, char *userID, char *passwd,
     if (pNLmount->u.mount.connected != 0)
     {
         /* Mount name exists - delete it so we can reuse it */
-        SMB_DeleteShare(pNLmount->u.mount.smb_lettr);
+        smb2_disconnect_share(pNLmount->u.mount.smb);
     }
 
     /* Connect or amend connection details */
 
-    res = SMB_CreateShare(SHR_DISK, CREATE_NEW_USER | CREATE_NEW_SHARE,
-                          servname, mountpath, userID, passwd,
-                          &(pNLmount->u.mount.smb_lettr));
+struct smb2_context *smb2,
+                       const char *server,
+                       const char *share,
+                       const char *user)
+    smb2_set_password(pNLmount->u.mount.smb, passwd);
+    res = smb2_connect_share(pNLmount->u.mount.smb, servname, mountpath, userID);
 
     if (res != OK) /* Didn't work. Forget it */
     {
@@ -486,7 +489,7 @@ err_t Omni_MountServer(char *servname, char *userID, char *passwd,
 
     /* Yes, it worked: update our known-server & known-shares lists */
 
-    pNLmount->u.mount.connected = 1;
+    pNLmount->u.mount.connected = true;
 
     pNLsrv = AddToList(&ServerList, S_VALID_TAG, servname);
     pNLmount->u.mount.servername = pNLsrv;
@@ -529,7 +532,7 @@ err_t Omni_DismountServer(int mount_id)
     /* Disregard errors! Disconnect anyway! */
 
     DoCLIop("Filer_CloseDir %s.$", mount_id);
-    SMB_DeleteShare(pNL->u.mount.smb_lettr);
+    smb2_disconnect_share(pNL->u.mount.smb);
     DeleteFromList(&MountsList, pNL);
     return OK;
 }
@@ -542,36 +545,36 @@ static uint size_clip(uint val, uint limit, uint blksize)
 }
 
 static err_t Omni_DetermineFreeSpace(int mount_id,
-                                     struct disk_size_response *DSR)
+                                     struct smb2_statvfs *vfs)
 {
     NAMELIST *pNL = Validate(mount_id, (int)M_VALID_TAG);
 
     if (pNL == NULL)
         return EBADPARAM;
 
-    return SMB_GetFreeSpace(pNL->u.mount.smb_lettr, DSR);
+    return smb2_statvfs(pNL->u.mount.smb2, "/", vfs);
 }
 
 static err_t Omni_FreeSpace(int mount_id,
                             int *freespace_out, int *usedspace_out, int *totspace_out)
 {
-    struct disk_size_response DSR;
+    struct smb2_statvfs statvfs;
     uint blklimit;
     err_t res;
 
-    res = Omni_DetermineFreeSpace(mount_id, &DSR);
+    res = Omni_DetermineFreeSpace(mount_id, &statvfs);
     if (res != OK)
         return res;
 
     /* Make sure we don't overflow.
-       Free space in bytes is DSR.blksize * DSR.freeblks */
+       Free space in bytes is statvfs.f_bsize * statvfs.freeblks */
 
-    blklimit = 0xFFFFFFFFU / DSR.blksize;
+    blklimit = UINT32_MAX / statvfs.f_bsize;
 
-    *freespace_out = size_clip(DSR.freeblks, blklimit, DSR.blksize);
-    *totspace_out = size_clip(DSR.totalblks, blklimit, DSR.blksize);
-    *usedspace_out = size_clip(DSR.totalblks - DSR.freeblks,
-                               blklimit, DSR.blksize);
+    *freespace_out = size_clip(statvfs.f_bfree, blklimit, statvfs.f_bsize);
+    *totspace_out = size_clip(statvfs.f_blocks, blklimit, statvfs.f_bsize);
+    *usedspace_out = size_clip(statvfs.f_blocks - statvfs.f_bfree,
+                               blklimit, statvfs.f_bsize);
 
     return OK;
 }
@@ -581,19 +584,19 @@ static err_t Omni_FreeSpace(int mount_id,
 static err_t Omni_FreeSpace64(int mount_id, int *success,
                               QWORD *freespace_out, QWORD *usedspace_out, QWORD *totspace_out)
 {
-    struct disk_size_response DSR;
+    struct smb2_statvfs statvfs;
     err_t res;
     uint used;
 
-    res = Omni_DetermineFreeSpace(mount_id, &DSR);
+    res = Omni_DetermineFreeSpace(mount_id, &statvfs);
     if (res != OK)
         return res;
 
     /* DWORD*DWORD => QWORD result */
-    *freespace_out = (QWORD)DSR.freeblks * DSR.blksize;
-    *totspace_out = (QWORD)DSR.totalblks * DSR.blksize;
-    used = DSR.totalblks - DSR.freeblks;
-    *usedspace_out = (QWORD)used * DSR.blksize;
+    *freespace_out = (QWORD)statvfs.f_bfree * statvfs.f_bsize;
+    *totspace_out = (QWORD)Dstatvfs.f_blocks * statvfs.f_bsize;
+    used = statvfs.f_blocks - statvfs.f_bfree;
+    *usedspace_out = (QWORD)used * statvfs.f_bsize;
     *success = 0;
 
     return OK;
@@ -996,12 +999,12 @@ static bool Omni_Registered = false;
    Returns 0 if not found. 'Name' should be not contain
    spaces or invalid chars, otherwise it won't be found.
 */
-char Omni_GetDrvLetter(char *name)
+struct smb2_context * Omni_GetDrvLetter(char *name)
 {
     NAMELIST *pNL = FindInList(MountsList, name);
 
     if (pNL != NULL)
-        return pNL->u.mount.smb_lettr;
+        return pNL->u.mount.smb2;
 
     return 0;
 }
@@ -1299,7 +1302,7 @@ static void Omni_Register(void)
 
     strcpy(titlebar, MsgLookup("_Version")); /* Temp copy */
     sprintf(infobox, "%s\n"
-                     "\xA9 Acorn Computers Ltd, 1997\n"
+                     "\xA9 Acorn Computers Ltd, 1997 Rob McKay, 2023\n"
                      "%s",
             (Stat_ClassMask & SCLASS_IP) ? MsgLookup("WhoTCPIP")
                                          : MsgLookup("WhoBEUI"),
@@ -1620,7 +1623,6 @@ void Omni_Debug(void)
     sprintf(fmt, "%%-%ds : %%s\n", strlen(MsgLookup("NameL")));
 
     printf(fmt, MsgLookup("NameH"), LM_Vars.machinename);
-    printf(fmt, MsgLookup("NameD"), LM_Vars.drivername);
     sprintf(temp, "%d", LM_Vars.namemode);
     printf(fmt, MsgLookup("NameM"), temp);
     strcpy(temp, Omni_Registered ? MsgLookup("Start")

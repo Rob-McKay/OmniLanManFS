@@ -36,6 +36,9 @@
 #include "NameCache.h"
 #include "SMBFind.h"
 
+#include "smb2/libsmb2.h"
+
+
 #define NAMEBUF_LEN (2 * DOS_NAME_LEN)
 #define name_R(x) ((char *)R[x])
 
@@ -339,6 +342,50 @@ static err_t Func_ReadDir(int reason, char *path_name, char *buffer,
 #endif
 }
 
+err_t rename_object(int *R)
+{
+    err_t err = Xlt_ConvertPath(name_R(1), DOSnamebuf);
+    if (err == OK)
+    {
+        err = Xlt_ConvertPath(name_R(2), DOSnamebuf + DOS_NAME_LEN);
+    }
+
+    DOS_ATTRIBS da;
+    RISCOS_ATTRIBS ra;
+
+    err = FileGetAttribs(DOSnamebuf, &da, &ra);
+    if (err == EFILENOTFOUND || err == EPATHNOTFOUND)
+    {
+        err = OK;
+    }
+
+    if (err == OK)
+    {
+        /* Trim any RO extension and append the ones from the source instead */
+        Xlt_RemoveROType(DOSnamebuf + DOS_NAME_LEN);
+        if ((da.attr & ATTR_DIR) == 0)
+        {
+            Xlt_AddROType(DOSnamebuf + DOS_NAME_LEN, ra.loadaddr, ra.execaddr);
+        }
+    }
+
+    if (err == OK)
+    {
+        err = SMB_Rename(DOSnamebuf, DOSnamebuf + DOS_NAME_LEN);
+    }
+
+    if (err == EBADRENAME)
+    {
+        R[1] = 1;
+        err = OK;
+    }
+    else
+    {
+        R[1] = 0;
+    }
+    return err;
+}
+
 /* Func ============================================================= */
 
 _kernel_oserror *fsentry_func(int *R)
@@ -373,45 +420,8 @@ _kernel_oserror *fsentry_func(int *R)
         break;
 
     case FSEntry_Func_Reason_RenameObject:
-        err = Xlt_ConvertPath(name_R(1), DOSnamebuf);
-        if (err == OK)
-            err = Xlt_ConvertPath(name_R(2), DOSnamebuf + DOS_NAME_LEN);
-        {
-            DOS_ATTRIBS da;
-            RISCOS_ATTRIBS ra;
-
-            err = FileGetAttribs(DOSnamebuf, &da, &ra);
-            if (err == EFILENOTFOUND || err == EPATHNOTFOUND)
-            {
-                err = OK;
-            }
-
-            if (err == OK)
-            {
-                /* Trim any RO extension and append the ones from the source instead */
-                Xlt_RemoveROType(DOSnamebuf + DOS_NAME_LEN);
-                if ((da.attr & ATTR_DIR) == 0)
-                {
-                    Xlt_AddROType(DOSnamebuf + DOS_NAME_LEN, ra.loadaddr, ra.execaddr);
-                }
-            }
-        }
-        if (err == OK)
-        {
-            err = SMB_Rename(DOSnamebuf, DOSnamebuf + DOS_NAME_LEN);
-        }
-
-        if (err == EBADRENAME)
-        {
-            R[1] = 1;
-            err = OK;
-        }
-        else
-        {
-            R[1] = 0;
-        }
+        err = rename_object(R);
         break;
-        /* Don't bother with any of this rubbish for long filename discs */
 
     case FSEntry_Func_Reason_SetFilingSystemOptions:
     case FSEntry_Func_Reason_ReadNameAndBootOptionOfDisc:

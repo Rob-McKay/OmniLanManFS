@@ -1,3 +1,4 @@
+/* -*- mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* Copyright 1998 Acorn Computers Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,14 +61,6 @@ extern void *Resources(void);
 typedef void (*pfnShutdown)(void);
 typedef void (*pfnTransportInit)(void);
 
-enum
-{
-    LMInitState_Uninitialised,
-    LMInitState_PreInit,
-    LMInitState_FullyInited,
-    LMInitState_Boot
-};
-
 static void startcallbacks(void);
 static void stopcallbacks(void);
 
@@ -81,8 +74,6 @@ static int msg_struct[4];        /* MessageTrans block */
 static _kernel_oserror msg_buff; /* MessageTrans buffer */
 static _kernel_oserror *msg_oserr;
 int LM_pw;                                    /* Our module's private word */
-struct NETBIOS_TRANSPORT *NB_ActiveTransport; /* Selected net transport */
-static pfnTransportInit NB_InitedTransport;   /* Identify active transport */
 static bool LM_Declared;                      /* True if we're registered as a filing system */
 
 /* ---------------------------------- */
@@ -247,7 +238,6 @@ static void LM_GracefulClosedown(void)
     SMB_Shutdown();  /* Dismounts all SMB mounts first as */
     Omni_Shutdown(); /* Omni_Shutdown zeros the Mounts lists */
     Prn_Shutdown();  /* Free print jobs */
-    NB_Shutdown();   /* Also calls LLC_Shutdown */
     Buf_Shutdown();  /* Tell MBufManager we're done */
     LM_Vars.initialised = LMInitState_PreInit;
 }
@@ -481,12 +471,6 @@ static _kernel_oserror *Cmd_LMDisconnect(const char *args)
 
 /* --------------------- */
 
-static void LanMan_InitTransport(pfnTransportInit i)
-{
-    NB_InitedTransport = i;
-    (*i)();
-}
-
 static void SetDefaultVars(void)
 {
     char *name;
@@ -494,11 +478,6 @@ static void SetDefaultVars(void)
 
     LM_Vars.initialised = LMInitState_Uninitialised;
     LM_Vars.namemode = NM_FIRSTCAPS;
-
-    /* See where IP packets are going to be sent */
-    name = getenv("Inet$EtherType");
-    strcpyn(LM_Vars.drivername,
-            (name == NULL) ? DEFAULT_ETHER_TYPE : name, NAME_LIMIT);
 
     name = getenv("Inet$HostName");
     /* Trap added to catch 'ARM_NoName', as set by STB OS */
@@ -539,9 +518,6 @@ static void SetDefaultVars(void)
     {
         strcpy(LM_Vars.workgroup, fs_name);
     }
-
-    /* Set transport type from CMOS, unless overridden on command line */
-    LanMan_InitTransport(NB_NBIP_Setup);
 }
 
 /* --------------------- */
@@ -931,10 +907,7 @@ void LM_Service(int service_number, _kernel_swi_regs *r, void *pw)
         break;
 
     case Service_InternetStatus:
-        if (NB_InitedTransport == NB_NBIP_Setup)
-        {
-            LM_check_internet_status(r);
-        }
+        LM_check_internet_status(r);
         break;
 
     default:
@@ -999,10 +972,6 @@ static err_t ProcessCmdLine(const char *_line)
     char *end;
     char *line;
 
-    /* This code relies on NB_xxx_Setup() only setting variables, not
-       allocating anything. Multiple NB_xxx_Setup()'s may be called if
-       the user is being perverse */
-
     /* NAS 20/3/97 - RO doesn't pass a 0-terminated string, but a ctrl-terminated one */
     strncpy(cli, _line, 255);
     line = end = cli;
@@ -1015,10 +984,6 @@ static err_t ProcessCmdLine(const char *_line)
         line++;
         switch (toupper(*line))
         {
-        case 'D': /* -d<driver_name> specify driver name */
-            line = copy_space(LM_Vars.drivername, line + 1, NAME_LIMIT);
-            break;
-
         case 'N': /* -n disable network browsing */
             Lgn_Logoff();
             break;
@@ -1026,10 +991,6 @@ static err_t ProcessCmdLine(const char *_line)
         case 'M': /* -m<name> use name as the advertised NETBIOS name */
             line = copy_space(LM_Vars.machinename, line + 1, NAME_LIMIT);
             strcpyn_upper(LM_Vars.machinename, LM_Vars.machinename, NAME_LIMIT);
-            break;
-
-        case 'I': /* -i use NBIP */
-            LanMan_InitTransport(NB_NBIP_Setup);
             break;
 
         default:
@@ -1210,26 +1171,6 @@ static _kernel_oserror *LM_init_phase_2(void)
 
     /* Try to start various modules */
 
-    debug0("Starting network transport...\n");
-
-    err = MsgError(NB_Startup());
-    if (err != NULL)
-    {
-        debug2("Error - NB_Startup() returned %d (%s)\n", err->errnum, err->errmess);
-        goto abort;
-    }
-
-#if 0
-  debug0("Starting filing system...\n");
-
-  err = LM_Declare();
-  if (err != NULL) {
-          debug1("LanManFS: %s\n", err->errmess);
-          NB_Shutdown();
-          goto abort;
-  }
-#endif
-
     startcallbacks();
 
     /* We have now managed to fully initialise everything that we need - whee! */
@@ -1240,7 +1181,6 @@ static _kernel_oserror *LM_init_phase_2(void)
 
     Omni_StartUp(); /* Try to contact OmniFiler */
 
-    /*LM_StartupBoot();*/
     if (want_boot)
     {
         debug0("Booting...\n");
@@ -1264,15 +1204,6 @@ abort:
         (shutdowns[ctr])();
     debug1("LanManFS: %s\n", LM_Status());
     return NULL;
-
-    /* abort used to use this, but that assumes deterministic module startup,   *
-     * which can't be assumed under DCI4, so now it just sits around waiting    *
-     * for an appropriate set of service calls to wake it up.  RCE 980212       *
-
-    abort:
-      LM_Finalise();
-      return err;
-     */
 }
 
 /* SNB 980224 added this function to verify the actual contents of the
@@ -1290,22 +1221,12 @@ static void LM_check_driver_status(_kernel_swi_regs *r)
            "  Driver supports DCI version %d.%02d\n",
            dib->dib_name, dib->dib_unit, r->r[2] ? "dy" : "start",
            r->r[3] / 100, r->r[3] % 100);
-
-    printf("We are looking for driver `%s' - got `%s'\n", LM_Vars.drivername,
-           if_name);
-
 #endif
-    if ((strcmp(LM_Vars.drivername, DEFAULT_ETHER_TYPE) == 0) &&
-        (r->r[2] == DCIDRIVER_STARTING) &&
-        (if_name[0] != 'l'))
-    {
-        /* Capture the first interface to start which isn't loopback */
-        (void)strncpy(LM_Vars.drivername, if_name, NAME_LIMIT);
-    }
 }
 
 static void LM_check_protocol_status(_kernel_swi_regs *r)
 {
+#if 0 // TODO
     /* A protocol module came or went (could be us in NetBEUI mode!)
      * Inform our transport layer if we find it was Internet leaving.
      */
@@ -1319,6 +1240,7 @@ static void LM_check_protocol_status(_kernel_swi_regs *r)
     {
         NB_InternetInit();
     }
+#endif
 }
 
 #ifdef TRACE
@@ -1402,18 +1324,11 @@ static void LM_check_internet_status(_kernel_swi_regs *r)
         /* Was it the right reason code? */
         if (r->r[0] != InternetStatus_InterfaceUpDown)
             return;
-        /* Was it the right interface? */
-        if (stricmp(LM_Vars.drivername, cp) != 0)
-            return;
         /* was the interface coming up? */
         if (r->r[2] != 1)
             return;
     }
 
-    /*if (LM_Vars.initialised == LMInitState_FullyInited)*/ {
-        /* Should never happen nowadays ?? */
-        LM_GracefulClosedown();
-    }
     LM_init_phase_2();
 }
 
